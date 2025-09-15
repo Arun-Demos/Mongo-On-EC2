@@ -1,0 +1,21 @@
+aws_account_id     = "111122223333"          # <— set your TARGET account here
+aws_region         = "ap-southeast-1"
+assume_role_arn    = ""                      # leave empty if same account; else like arn:aws:iam::111122223333:role/TerraformDeploy
+
+vpc_id             = "vpc-xxxx"
+subnet_id          = "subnet-xxxx"
+instance_name      = "mongodb-ec2"
+instance_type      = "t3.medium"
+key_name           = null                    # or "my-keypair"
+ssh_ingress_cidr   = "0.0.0.0/0"             # tighten or set to "127.0.0.1/32" if only SSM
+eks_node_sg_id     = ""                      # sg-xxxx if allowing EKS nodes
+allowed_cidrs      = []
+
+mongo_version      = "7.0"
+root_volume_gb     = 16
+data_volume_gb     = 100
+
+backup_bucket_name   = "your-unique-mongo-backups-bucket"
+backup_prefix        = "mongo/stardb"
+backup_cron          = "15 2 * * *"
+backup_retention_days= 30
