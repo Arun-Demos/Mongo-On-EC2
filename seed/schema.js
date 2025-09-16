@@ -1,6 +1,5 @@
-// MongoDB schema definition for the "services" collection
-const db = connect("localhost:27017/stardb");
-
+// Schema for the "services" collection in stardb.
+// This file assumes mongosh is invoked with DB "stardb" already selected.
 db.createCollection("services", {
   validator: {
     $jsonSchema: {
@@ -9,7 +8,7 @@ db.createCollection("services", {
       properties: {
         name:        { bsonType: "string",  maxLength: 50 },
         subscribers: { bsonType: "int",     minimum: 0 },
-        revenue:     { bsonType: "decimal" }
+        revenue:     { bsonType: "decimal" } // Decimal128
       }
     }
   },
