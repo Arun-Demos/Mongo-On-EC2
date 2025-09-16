@@ -8,22 +8,22 @@ pipeline {
   }
 
   parameters {
-    // --- Action ---
+    // Action
     choice(name: 'ACTION', choices: ['plan','apply','destroy'], description: 'Terraform action')
 
-    // --- Target account/region ---
+    // Target account/region
     string(name: 'AWS_ACCOUNT_ID', defaultValue: '111122223333', description: 'Target AWS Account ID (informational)')
     string(name: 'AWS_REGION',     defaultValue: 'ap-southeast-1', description: 'Target region')
 
-    // --- Optional cross-account assume role ---
+    // Cross-account (optional)
     string(name: 'ASSUME_ROLE_ARN', defaultValue: '', description: 'Optional: arn:aws:iam::<acct>:role/TerraformDeploy')
 
-    // --- Backend (tfstate) ---
+    // Backend state
     string(name: 'TF_STATE_BUCKET', defaultValue: 'tf-state-prod', description: 'S3 bucket for Terraform state')
     string(name: 'TF_STATE_KEY',    defaultValue: 'mongo-ec2/terraform.tfstate', description: 'Object key for state')
-    string(name: 'TF_LOCK_TABLE',   defaultValue: 'tf-locks', description: 'DynamoDB table for state locks')
+    string(name: 'TF_LOCK_TABLE',   defaultValue: 'tf-locks', description: 'DynamoDB lock table')
 
-    // --- Network / compute ---
+    // Network / compute
     string(name: 'VPC_ID',        defaultValue: '', description: 'Target VPC ID')
     string(name: 'SUBNET_ID',     defaultValue: '', description: 'Private subnet ID for EC2')
     string(name: 'EKS_NODE_SG_ID',defaultValue: '', description: 'Allow 27017 from this EKS node SG (optional)')
@@ -33,15 +33,13 @@ pipeline {
     string(name: 'INSTANCE_TYPE', defaultValue: 't3.medium',   description: 'EC2 instance type')
     string(name: 'KEY_NAME',      defaultValue: '',            description: 'EC2 key pair name (optional)')
 
-    // --- Linux AMI selection ---
+    // Linux AMI & Mongo
     string(name: 'LINUX_AMI_OWNER',  defaultValue: '137112412989', description: 'AMI owner (Amazon=137112412989, Canonical=099720109477)')
-    string(name: 'LINUX_AMI_FILTER', defaultValue: 'al2023-ami-*-x86_64', description: 'AMI name filter pattern')
-
-    // --- MongoDB ---
-    string(name: 'MONGO_VERSION', defaultValue: '7.0', description: 'MongoDB major version (e.g., 6.0 or 7.0)')
+    string(name: 'LINUX_AMI_FILTER', defaultValue: 'al2023-ami-*-x86_64', description: 'AMI name filter pattern (supports older distros)')
+    string(name: 'MONGO_VERSION',    defaultValue: '7.0', description: 'MongoDB major version (e.g., 6.0 or 7.0)')
     booleanParam(name: 'PUBLIC_ACCESS', defaultValue: false, description: 'Allow 27017 from 0.0.0.0/0')
 
-    // --- Storage / backups ---
+    // Storage / backups
     string(name: 'ROOT_VOLUME_GB', defaultValue: '16',  description: 'Root volume size (GB)')
     string(name: 'DATA_VOLUME_GB', defaultValue: '100', description: 'Data EBS volume size (GB)')
     string(name: 'BACKUP_BUCKET',  defaultValue: 'your-unique-mongo-backups-bucket', description: 'Globally-unique S3 bucket for backups')
@@ -73,7 +71,7 @@ pipeline {
           fi
           terraform -version
 
-          # jq (for assume-role JSON parsing)
+          # jq
           if ! command -v jq >/dev/null 2>&1; then
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update -y && sudo apt-get install -y jq
@@ -82,7 +80,7 @@ pipeline {
             fi
           fi
 
-          # AWS CLI (usually present on EKS nodes; install if missing)
+          # AWS CLI
           if ! command -v aws >/dev/null 2>&1; then
             curl -sSLo awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
             unzip -q awscliv2.zip
@@ -103,7 +101,6 @@ pipeline {
           export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)
           export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)
           export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)
-          # Persist for later stages (sourced if present)
           cat > $WORKSPACE/aws-env.sh <<EOF
 export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -159,26 +156,17 @@ EOF
             TFVARS="$TFVARS -var=eks_node_sg_id=${EKS_NODE_SG_ID}"
           fi
 
-          # allowed_cidrs: comma-separated -> HCL list
           if [ -n "${ALLOWED_CIDRS}" ]; then
             CLEAN=$(echo "${ALLOWED_CIDRS}" | tr -d ' ')
             LIST=$(printf '%s' "$CLEAN" | awk -F',' '{printf("["); for(i=1;i<=NF;i++){printf("%s\"%s\"", (i>1?",":""), $i)}; printf("]")}') 
             TFVARS="$TFVARS -var=allowed_cidrs=${LIST}"
           fi
 
-          # Linux AMI + Mongo
           TFVARS="$TFVARS -var=linux_ami_owner=${LINUX_AMI_OWNER}"
           TFVARS="$TFVARS -var=linux_ami_filter=${LINUX_AMI_FILTER}"
           TFVARS="$TFVARS -var=mongo_version=${MONGO_VERSION}"
+          TFVARS="$TFVARS -var=public_access=${PUBLIC_ACCESS}"
 
-          # Public access (boolean)
-          if [ "${PUBLIC_ACCESS}" = "true" ]; then
-            TFVARS="$TFVARS -var=public_access=true"
-          else
-            TFVARS="$TFVARS -var=public_access=false"
-          fi
-
-          # Storage / backups
           TFVARS="$TFVARS -var=root_volume_gb=${ROOT_VOLUME_GB}"
           TFVARS="$TFVARS -var=data_volume_gb=${DATA_VOLUME_GB}"
           TFVARS="$TFVARS -var=backup_bucket_name=${BACKUP_BUCKET}"
@@ -201,10 +189,6 @@ EOF
 
   post {
     always {
-      script {
-        // Collect any local state backups just in case
-        sh 'ls -l infra || true'
-      }
       archiveArtifacts artifacts: 'infra/*.tfstate.backup', allowEmptyArchive: true
     }
   }
