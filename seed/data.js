@@ -1,6 +1,5 @@
-// Initial dataset for the "services" collection
-const db = connect("localhost:27017/stardb");
-
+// Initial dataset for "services" collection of stardb.
+// This file assumes mongosh is invoked with DB "stardb" already selected.
 db.services.insertMany([
   { name: "StarVision",    subscribers: NumberInt(12000), revenue: NumberDecimal("48000.00") },
   { name: "StarDocs",      subscribers: NumberInt(8500),  revenue: NumberDecimal("25500.00") },
