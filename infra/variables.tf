@@ -15,7 +15,7 @@ variable "assume_role_arn" {
   default     = ""
 }
 
-# Linux AMI selection
+# Linux AMI selection (older distros supported via filter)
 variable "linux_ami_owner" {
   description = "AMI owner ID (Amazon=137112412989, Canonical=099720109477)"
   type        = string
@@ -42,10 +42,10 @@ variable "public_access" {
 }
 
 # Networking
-variable "vpc_id" { type = string }
-variable "subnet_id" { type = string }
+variable "vpc_id"     { type = string }
+variable "subnet_id"  { type = string }
 variable "eks_node_sg_id" {
-  description = "SG ID of EKS nodes that should reach MongoDB"
+  description = "SG ID of EKS nodes that should reach MongoDB (private IP)"
   type        = string
   default     = ""
 }
@@ -61,14 +61,14 @@ variable "allowed_cidrs" {
 }
 
 # EC2
-variable "instance_name" { type = string default = "mongodb-ec2" }
-variable "instance_type" { type = string default = "t3.medium" }
-variable "key_name" { type = string default = null }
+variable "instance_name"  { type = string default = "mongodb-ec2" }
+variable "instance_type"  { type = string default = "t3.medium" }
+variable "key_name"       { type = string default = null }
 variable "root_volume_gb" { type = number default = 16 }
 variable "data_volume_gb" { type = number default = 100 }
 
 # Backups
-variable "backup_bucket_name" { type = string }
-variable "backup_prefix" { type = string default = "mongo/stardb" }
-variable "backup_cron" { type = string default = "15 2 * * *" }
-variable "backup_retention_days" { type = number default = 30 }
+variable "backup_bucket_name"      { type = string }
+variable "backup_prefix"           { type = string default = "mongo/stardb" }
+variable "backup_cron"             { type = string default = "15 2 * * *" }
+variable "backup_retention_days"   { type = number default = 30 }
