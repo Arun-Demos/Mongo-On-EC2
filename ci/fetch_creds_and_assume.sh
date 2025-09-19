@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Required env from Jenkins parameters
+# Inputs from Jenkins
 : "${AWS_REGION_PARAM:?AWS_REGION_PARAM not set}"
-
-# Optional inputs
-ASSUME_ROLE_ARN_RAW="${ASSUME_ROLE_ARN:-}"             # can be full role ARN, 12-digit acct id, user ARN, or empty
-ASSUME_ROLE_NAME="${ASSUME_ROLE_NAME:-TerraformDeployRole}"
+TARGET_ACCOUNT_ID="${TARGET_ACCOUNT_ID:-}"
+TARGET_ROLE_NAME="${TARGET_ROLE_NAME:-TerraformDeployRole}"
 
 # Conjur secret content is injected by Jenkins withCredentials
 : "${AWS_DYNAMIC_SECRET_JSON:?AWS_DYNAMIC_SECRET_JSON not provided by Jenkins withCredentials}"
 
-# --- 1) Base session from Conjur secret (support nested or flat fields) ---
+# --- 1) Base session from Conjur secret (supports nested/flat) ---
 AKID=$(echo "$AWS_DYNAMIC_SECRET_JSON" | jq -r '.data.access_key_id // .AccessKeyId')
 SKEY=$(echo "$AWS_DYNAMIC_SECRET_JSON" | jq -r '.data.secret_access_key // .SecretAccessKey')
 STOK=$(echo "$AWS_DYNAMIC_SECRET_JSON" | jq -r '.data.session_token // .SessionToken')
@@ -31,70 +29,36 @@ EOF
 # shellcheck disable=SC1091
 source ./.awscreds
 
-echo "[INFO] Caller identity (Conjur creds / base):"
-aws sts get-caller-identity
+echo "[INFO] Caller identity (base):"
+BASE_ID_JSON=$(aws sts get-caller-identity)
+echo "$BASE_ID_JSON"
+BASE_ACCT=$(echo "$BASE_ID_JSON" | jq -r .Account)
 
-# --- 2) Normalize target role input ---
-normalize_role_arn() {
-  local raw="$1"
-  local role_name="$2"
+# --- 2) Decide if we should assume a role ---
+ROLE_TO_ASSUME=""
 
-  if [[ -z "$raw" ]]; then
-    echo ""
-    return 0
-  fi
-
-  # Full role ARN?
-  if [[ "$raw" =~ ^arn:aws:iam::[0-9]{12}:role/.+ ]]; then
-    echo "$raw"; return 0
-  fi
-
-  # Plain 12-digit account id?
-  if [[ "$raw" =~ ^[0-9]{12}$ ]]; then
-    echo "arn:aws:iam::${raw}:role/${role_name}"; return 0
-  fi
-
-  # User ARN? derive account id and build role arn with provided role_name
-  if [[ "$raw" =~ ^arn:aws:iam::([0-9]{12}):user/.+ ]]; then
-    local acct="${BASH_REMATCH[1]}"
-    echo "arn:aws:iam::${acct}:role/${role_name}"; return 0
-  fi
-
-  # Anything else → invalid
-  echo "__INVALID__"
-}
-
-# Prefer explicit ASSUME_ROLE_ARN (raw), else ROLE_HINT (if it’s a role arn and different)
-ROLE_TO_ASSUME="$(normalize_role_arn "${ASSUME_ROLE_ARN_RAW}" "${ASSUME_ROLE_NAME}")"
-
-if [[ -z "$ROLE_TO_ASSUME" ]]; then
-  # Only consider ROLE_HINT if it looks like a role ARN and differs from current identity
-  if [[ -n "$ROLE_HINT" && "$ROLE_HINT" =~ ^arn:aws:iam::[0-9]{12}:role/.+ ]]; then
-    CURRENT_ARN="$(aws sts get-caller-identity --query Arn --output text || true)"
-    if [[ "$CURRENT_ARN" != "$ROLE_HINT" ]]; then
-      ROLE_TO_ASSUME="$ROLE_HINT"
-    fi
+# 2a) If the secret explicitly includes a role_arn, prefer that.
+if [[ -n "$ROLE_HINT" && "$ROLE_HINT" =~ ^arn:aws:iam::[0-9]{12}:role/.+ ]]; then
+  CURRENT_ARN=$(echo "$BASE_ID_JSON" | jq -r .Arn)
+  if [[ "$CURRENT_ARN" != "$ROLE_HINT" ]]; then
+    ROLE_TO_ASSUME="$ROLE_HINT"
+    echo "[INFO] Using role_arn from Conjur secret: ${ROLE_TO_ASSUME}"
   fi
 fi
 
-if [[ "$ROLE_TO_ASSUME" == "__INVALID__" ]]; then
-  echo "[ERR] ASSUME_ROLE_ARN must be one of:
-  - Full ROLE ARN: arn:aws:iam::<12-digit-acct>:role/<RoleName>
-  - 12-digit account id: <12-digit-acct> (uses ASSUME_ROLE_NAME='${ASSUME_ROLE_NAME}')
-  - USER ARN: arn:aws:iam::<12-digit-acct>:user/<UserName> (derives role using ASSUME_ROLE_NAME)
-Given: '${ASSUME_ROLE_ARN_RAW}'" >&2
-  exit 2
+# 2b) Else, if TARGET_ACCOUNT_ID is set & different, build a standard role ARN in that account.
+if [[ -z "$ROLE_TO_ASSUME" && -n "$TARGET_ACCOUNT_ID" && "$TARGET_ACCOUNT_ID" != "$BASE_ACCT" ]]; then
+  ROLE_TO_ASSUME="arn:aws:iam::${TARGET_ACCOUNT_ID}:role/${TARGET_ROLE_NAME}"
+  echo "[INFO] Will assume into target account via: ${ROLE_TO_ASSUME}"
 fi
 
-# --- 3) Optional cross-account hop ---
+# --- 3) Assume role if needed ---
 if [[ -n "$ROLE_TO_ASSUME" ]]; then
   echo "[INFO] Assuming role: ${ROLE_TO_ASSUME}"
-  CREDS="$(aws sts assume-role --role-arn "${ROLE_TO_ASSUME}" --role-session-name "jenkins-mongo-tf")"
-
-  export AWS_ACCESS_KEY_ID="$(echo "$CREDS" | jq -r .Credentials.AccessKeyId)"
-  export AWS_SECRET_ACCESS_KEY="$(echo "$CREDS" | jq -r .Credentials.SecretAccessKey)"
-  export AWS_SESSION_TOKEN="$(echo "$CREDS" | jq -r .Credentials.SessionToken)"
-
+  CREDS=$(aws sts assume-role --role-arn "${ROLE_TO_ASSUME}" --role-session-name "jenkins-mongo-ec2")
+  export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .Credentials.AccessKeyId)
+  export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .Credentials.SecretAccessKey)
+  export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .Credentials.SessionToken)
   cat > .awscreds <<EOF
 export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
@@ -107,5 +71,5 @@ EOF
   echo "[INFO] Caller identity (assumed):"
   aws sts get-caller-identity
 else
-  echo "[INFO] No role assumption requested (using base Conjur creds)."
+  echo "[INFO] No role assumption requested; using base Conjur creds."
 fi
