@@ -6,7 +6,7 @@ variable "aws_account_id" {
 variable "aws_region" {
   description = "Region to deploy into"
   type        = string
-  default     = "ap-southeast-1"
+  default     = "us-east-1"
 }
 
 variable "assume_role_arn" {
