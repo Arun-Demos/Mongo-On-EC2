@@ -5,11 +5,11 @@ packages: [jq, git, awscli]
 runcmd:
   - |
     set -eux
-    MONGO_MAJOR="${mongo_version}"
-    AWS_REGION="${aws_region}"
-    BUCKET="${backup_bucket_name}"
-    PREFIX="${backup_prefix}"
-    PUBLIC="${public_access}"
+    MONGO_MAJOR="${MONGO_MAJOR}"
+    AWS_REGION="${REGION}"
+    BUCKET="${BUCKET}"
+    PREFIX="${PREFIX}"
+    PUBLIC="${PUBLIC}"
 
     # --- OS detection & Mongo repo install ---
     if [ -f /etc/system-release ]; then
