@@ -175,11 +175,34 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "mongo_backups" {
 
 resource "aws_s3_bucket_public_access_block" "mongo_backups" {
   bucket                  = aws_s3_bucket.mongo_backups.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
 }
+
+resource "aws_s3_bucket_policy" "public_read" {
+  bucket = aws_s3_bucket.mongo_backups.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject",
+        Effect    = "Allow",
+        Principal = "*",
+        Action    = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ],
+        Resource = [
+          aws_s3_bucket.mongo_backups.arn,
+          "${aws_s3_bucket.mongo_backups.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
 
 resource "aws_s3_bucket_lifecycle_configuration" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
