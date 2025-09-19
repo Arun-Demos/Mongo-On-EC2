@@ -24,6 +24,7 @@ gpgkey=https://www.mongodb.org/static/pgp/server-$${MONGO_MAJOR}.asc
 EOR
       yum install -y xfsprogs mongodb-org
     elif [ -f /etc/lsb-release ] || [ -f /etc/debian_version ]; then
+      # Ubuntu
       apt-get update
       apt-get install -y wget gnupg xfsprogs
       wget -qO - https://www.mongodb.org/static/pgp/server-$${MONGO_MAJOR}.asc | apt-key add -
