@@ -1,13 +1,3 @@
-# --- AMI (supports older distros via name filter) ---
-data "aws_ami" "linux" {
-  most_recent = true
-  owners      = [var.linux_ami_owner]
-  filter {
-    name   = "name"
-    values = [var.linux_ami_filter]
-  }
-}
-
 # --- Subnet info ---
 data "aws_subnet" "selected" { id = var.subnet_id }
 
@@ -17,7 +7,6 @@ resource "aws_security_group" "mongo" {
   description = "MongoDB SG"
   vpc_id      = var.vpc_id
 
-  # SSH
   ingress {
     from_port   = 22
     to_port     = 22
@@ -25,7 +14,6 @@ resource "aws_security_group" "mongo" {
     cidr_blocks = [var.ssh_ingress_cidr]
   }
 
-  # Allow EKS nodes (pods -> private IP)
   dynamic "ingress" {
     for_each = var.eks_node_sg_id != "" ? [1] : []
     content {
@@ -37,7 +25,6 @@ resource "aws_security_group" "mongo" {
     }
   }
 
-  # Optional public access
   dynamic "ingress" {
     for_each = var.public_access ? [1] : []
     content {
@@ -49,7 +36,6 @@ resource "aws_security_group" "mongo" {
     }
   }
 
-  # Optional extra CIDRs
   dynamic "ingress" {
     for_each = var.allowed_cidrs
     content {
@@ -94,13 +80,11 @@ resource "aws_iam_role" "ec2_role" {
   assume_role_policy = data.aws_iam_policy_document.ec2_trust.json
 }
 
-# SSM core (SSM agent, Session Manager)
 resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Read SSM parameter (and decrypt with AWS-managed KMS key for SSM)
 data "aws_iam_policy_document" "ssm_read" {
   statement {
     actions   = ["ssm:GetParameter"]
@@ -155,7 +139,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
   role = aws_iam_role.ec2_role.name
 }
 
-# --- S3 backups bucket ---
+# --- S3 backups bucket (PRIVATE by default) ---
 resource "aws_s3_bucket" "mongo_backups" {
   bucket        = var.backup_bucket_name
   force_destroy = false
@@ -166,43 +150,20 @@ resource "aws_s3_bucket_versioning" "mongo_backups" {
   versioning_configuration { status = "Enabled" }
 }
 
+resource "aws_s3_bucket_public_access_block" "mongo_backups" {
+  bucket                  = aws_s3_bucket.mongo_backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
   rule {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
-
-resource "aws_s3_bucket_public_access_block" "mongo_backups" {
-  bucket                  = aws_s3_bucket.mongo_backups.id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_policy" "public_read" {
-  bucket = aws_s3_bucket.mongo_backups.id
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject",
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ],
-        Resource = [
-          aws_s3_bucket.mongo_backups.arn,
-          "${aws_s3_bucket.mongo_backups.arn}/*"
-        ]
-      }
-    ]
-  })
-}
-
 
 resource "aws_s3_bucket_lifecycle_configuration" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
@@ -224,7 +185,7 @@ resource "aws_ebs_volume" "data" {
 
 # --- EC2 instance ---
 resource "aws_instance" "mongo" {
-  ami                    = data.aws_ami.linux.id
+  ami                    = var.linux_ami_id
   instance_type          = var.instance_type
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.mongo.id]
@@ -247,9 +208,9 @@ resource "aws_instance" "mongo" {
       PREFIX="${var.backup_prefix}"
       PUBLIC="${var.public_access}"
 
-      # --- OS detection & Mongo repo install (supports Amazon Linux & Ubuntu) ---
+      # --- OS detection & Mongo repo install ---
       if [ -f /etc/system-release ]; then
-        # Amazon Linux / AL2 / AL2023
+        # Amazon Linux
         cat >/etc/yum.repos.d/mongodb-org.repo <<EOR
 [mongodb-org]
 name=MongoDB Repository
@@ -263,7 +224,6 @@ EOR
         apt-get update
         apt-get install -y wget gnupg xfsprogs
         wget -qO - https://www.mongodb.org/static/pgp/server-${MONGO_MAJOR}.asc | apt-key add -
-        # Try to derive codename, default to focal if unknown (works for Ubuntu 20.04)
         CODENAME="$(lsb_release -sc 2>/dev/null || echo focal)"
         echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu ${CODENAME}/mongodb-org/${MONGO_MAJOR} multiverse" \
           | tee /etc/apt/sources.list.d/mongodb-org.list
@@ -288,7 +248,7 @@ EOR
         echo -e "storage:\n  dbPath: /var/lib/mongo" >> /etc/mongod.conf
       fi
 
-      # Bind addresses: localhost + private IP (+ all if PUBLIC=true)
+      # Bind addresses
       PRIV_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4 || echo 127.0.0.1)
       BIND_LIST="127.0.0.1,${PRIV_IP}"
       if [ "$PUBLIC" = "true" ]; then
@@ -322,7 +282,7 @@ EOR
       systemctl restart mongod
       sleep 3
 
-      # --- Seed files from Terraform (schema + data) ---
+      # --- Seed files ---
       mkdir -p /root/seed
       cat >/root/seed/schema.js <<'EOSCHEMA'
 ${file("${path.module}/../seed/schema.js")}
@@ -332,10 +292,7 @@ EOSCHEMA
 ${file("${path.module}/../seed/data.js")}
 EODATA
 
-      # Apply schema (idempotent)
       mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin stardb /root/seed/schema.js || true
-
-      # Seed only if empty
       COUNT=$(mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin --eval "db.services.countDocuments()" stardb || echo 0)
       if [ "$COUNT" -eq 0 ]; then
         mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin stardb /root/seed/data.js
