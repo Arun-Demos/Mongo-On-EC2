@@ -1,0 +1,120 @@
+#cloud-config
+package_update: true
+packages: [jq, git, awscli]
+
+runcmd:
+  - |
+    set -eux
+    MONGO_MAJOR="${mongo_version}"
+    AWS_REGION="${aws_region}"
+    BUCKET="${backup_bucket_name}"
+    PREFIX="${backup_prefix}"
+    PUBLIC="${public_access}"
+
+    # --- OS detection & Mongo repo install ---
+    if [ -f /etc/system-release ]; then
+      # Amazon Linux
+      cat >/etc/yum.repos.d/mongodb-org.repo <<EOR
+[mongodb-org]
+name=MongoDB Repository
+baseurl=https://repo.mongodb.org/yum/amazon/2/mongodb-org/$${MONGO_MAJOR}/x86_64/
+gpgcheck=1
+enabled=1
+gpgkey=https://www.mongodb.org/static/pgp/server-$${MONGO_MAJOR}.asc
+EOR
+      yum install -y xfsprogs mongodb-org
+    elif [ -f /etc/lsb-release ] || [ -f /etc/debian_version ]; then
+      apt-get update
+      apt-get install -y wget gnupg xfsprogs
+      wget -qO - https://www.mongodb.org/static/pgp/server-$${MONGO_MAJOR}.asc | apt-key add -
+      CODENAME="$(lsb_release -sc 2>/dev/null || echo focal)"
+      echo "deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu $${CODENAME}/mongodb-org/$${MONGO_MAJOR} multiverse" \
+        | tee /etc/apt/sources.list.d/mongodb-org.list
+      apt-get update
+      apt-get install -y mongodb-org
+    else
+      echo "Unsupported distro; attempting yum..."
+      yum install -y xfsprogs mongodb-org || true
+    fi
+
+    # --- Data volume ---
+    mkfs -t xfs /dev/xvdf || true
+    mkdir -p /var/lib/mongo
+    echo "/dev/xvdf /var/lib/mongo xfs defaults,noatime 0 2" >> /etc/fstab
+    mount -a
+    chown -R mongod:mongod /var/lib/mongo
+
+    # Ensure dbPath in mongod.conf
+    sed -i 's|dbPath:.*|dbPath: /var/lib/mongo|' /etc/mongod.conf || true
+    if ! grep -q 'dbPath:' /etc/mongod.conf; then
+      mkdir -p /etc
+      echo -e "storage:\n  dbPath: /var/lib/mongo" >> /etc/mongod.conf
+    fi
+
+    # Bind addresses: localhost + private IP (+ all if PUBLIC=true)
+    PRIV_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4 || echo 127.0.0.1)
+    BIND_LIST="127.0.0.1,$${PRIV_IP}"
+    if [ "$${PUBLIC}" = "true" ]; then
+      BIND_LIST="$${BIND_LIST},0.0.0.0"
+    fi
+    if grep -q '^ *bindIp:' /etc/mongod.conf; then
+      sed -i "s/^ *bindIp: .*/  bindIp: $${BIND_LIST}/" /etc/mongod.conf
+    else
+      sed -i "/^net:/a\\  bindIp: $${BIND_LIST}" /etc/mongod.conf || echo -e "net:\n  bindIp: $${BIND_LIST}" >> /etc/mongod.conf
+    fi
+
+    # Enable auth
+    if ! grep -q '^security:' /etc/mongod.conf; then
+      echo -e "security:\n  authorization: enabled" >> /etc/mongod.conf
+    else
+      sed -i 's/^security:.*/security:\n  authorization: enabled/' /etc/mongod.conf
+    fi
+
+    systemctl enable mongod
+    systemctl start mongod
+    sleep 5
+
+    # --- Admin user ---
+    ADMIN_PASS=$(aws ssm get-parameter --with-decryption --name "/mongo/admin_password" --region $${AWS_REGION} --output text --query Parameter.Value)
+    mongosh --quiet --eval '
+      try {
+        use("admin");
+        db.createUser({user: "admin", pwd: "'"$ADMIN_PASS"'", roles:[{role:"root",db:"admin"}]});
+      } catch(e) {}
+    '
+    systemctl restart mongod
+    sleep 3
+
+    # --- Seed files (schema + data) ---
+    mkdir -p /root/seed
+    cat >/root/seed/schema.js <<'EOSCHEMA'
+${schema_js}
+EOSCHEMA
+
+    cat >/root/seed/data.js <<'EODATA'
+${data_js}
+EODATA
+
+    mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin stardb /root/seed/schema.js || true
+    COUNT=$(mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin --eval "db.services.countDocuments()" stardb || echo 0)
+    if [ "$COUNT" -eq 0 ]; then
+      mongosh --quiet -u admin -p "$ADMIN_PASS" --authenticationDatabase admin stardb /root/seed/data.js
+    fi
+
+    # --- Backup script & cron ---
+    cat >/opt/mongo-backup.sh <<'EOB'
+#!/bin/bash
+set -e
+AWS_REGION="${AWS_REGION}"
+BUCKET="${BUCKET}"
+PREFIX="${PREFIX}"
+now=$(date -u +'%Y-%m-%dT%H-%M-%SZ')
+host=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo unknown)
+key="${PREFIX}/stardb-${host}-${now}.archive.gz"
+ADMIN_PASS=$(aws ssm get-parameter --with-decryption --name "/mongo/admin_password" --region "${AWS_REGION}" --output text --query Parameter.Value)
+mongodump --username admin --password "${ADMIN_PASS}" --authenticationDatabase admin --db stardb --archive | gzip | aws s3 cp - "s3://${BUCKET}/${key}" --region "${AWS_REGION}"
+echo "Uploaded backup to s3://${BUCKET}/${key}"
+EOB
+    chmod +x /opt/mongo-backup.sh
+    echo '${backup_cron} root AWS_REGION=$${AWS_REGION} BUCKET=$${BUCKET} PREFIX=$${PREFIX} /opt/mongo-backup.sh >> /var/log/mongo-backup.log 2>&1' > /etc/cron.d/mongo-backup
+    systemctl restart crond
