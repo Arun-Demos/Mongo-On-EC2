@@ -6,7 +6,7 @@ variable "aws_account_id" {
 variable "aws_region" {
   description = "Region to deploy into"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-southeast-1"
 }
 
 variable "assume_role_arn" {
@@ -15,17 +15,10 @@ variable "assume_role_arn" {
   default     = ""
 }
 
-# Linux AMI selection (older distros supported via filter)
-variable "linux_ami_owner" {
-  description = "AMI owner ID (Amazon=137112412989, Canonical=099720109477)"
+# --- AMI selection (explicit only) ---
+variable "linux_ami_id" {
+  description = "Specific AMI ID to use (must exist in the target region)"
   type        = string
-  default     = "137112412989"
-}
-
-variable "linux_ami_filter" {
-  description = "AMI name filter (e.g., 'al2023-ami-*-x86_64', 'amzn2-ami-hvm-*-x86_64-gp2', 'ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*')"
-  type        = string
-  default     = "al2023-ami-*-x86_64"
 }
 
 # MongoDB version
@@ -42,18 +35,21 @@ variable "public_access" {
 }
 
 # Networking
-variable "vpc_id"     { type = string }
-variable "subnet_id"  { type = string }
+variable "vpc_id"    { type = string }
+variable "subnet_id" { type = string }
+
 variable "eks_node_sg_id" {
   description = "SG ID of EKS nodes that should reach MongoDB (private IP)"
   type        = string
   default     = ""
 }
+
 variable "ssh_ingress_cidr" {
   description = "CIDR for SSH access"
   type        = string
   default     = "0.0.0.0/0"
 }
+
 variable "allowed_cidrs" {
   description = "Extra CIDRs allowed to reach Mongo"
   type        = list(string)
@@ -68,7 +64,7 @@ variable "root_volume_gb" { type = number default = 16 }
 variable "data_volume_gb" { type = number default = 100 }
 
 # Backups
-variable "backup_bucket_name"      { type = string }
-variable "backup_prefix"           { type = string default = "mongo/stardb" }
-variable "backup_cron"             { type = string default = "15 2 * * *" }
-variable "backup_retention_days"   { type = number default = 30 }
+variable "backup_bucket_name"    { type = string }
+variable "backup_prefix"         { type = string default = "mongo/stardb" }
+variable "backup_cron"           { type = string default = "15 2 * * *" }
+variable "backup_retention_days" { type = number default = 30 }
