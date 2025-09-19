@@ -184,7 +184,6 @@ resource "aws_instance" "mongo" {
     BUCKET      = var.backup_bucket_name
     PREFIX      = var.backup_prefix
     CRON        = var.backup_cron
-    PUBLIC      ="${public_access}"
   })
 
   tags = {
