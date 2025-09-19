@@ -23,7 +23,7 @@ variable "linux_ami_id" {
 
 # MongoDB version
 variable "mongo_version" {
-  description = "MongoDB version branch (6.0, 7.0, etc.)"
+  description = "MongoDB version branch (5.0, 6.0, 7.0, etc.)"
   type        = string
   default     = "7.0"
 }
@@ -35,8 +35,13 @@ variable "public_access" {
 }
 
 # Networking
-variable "vpc_id"    { type = string }
-variable "subnet_id" { type = string }
+variable "vpc_id" {
+  type = string
+}
+
+variable "subnet_id" {
+  type = string
+}
 
 variable "eks_node_sg_id" {
   description = "SG ID of EKS nodes that should reach MongoDB (private IP)"
@@ -57,14 +62,47 @@ variable "allowed_cidrs" {
 }
 
 # EC2
-variable "instance_name"  { type = string default = "mongodb-ec2" }
-variable "instance_type"  { type = string default = "t3.medium" }
-variable "key_name"       { type = string default = null }
-variable "root_volume_gb" { type = number default = 16 }
-variable "data_volume_gb" { type = number default = 100 }
+variable "instance_name" {
+  type    = string
+  default = "mongodb-ec2"
+}
+
+variable "instance_type" {
+  type    = string
+  default = "t3.medium"
+}
+
+variable "key_name" {
+  type    = string
+  default = null
+}
+
+variable "root_volume_gb" {
+  type    = number
+  default = 16
+}
+
+variable "data_volume_gb" {
+  type    = number
+  default = 100
+}
 
 # Backups
-variable "backup_bucket_name"    { type = string }
-variable "backup_prefix"         { type = string default = "mongo/stardb" }
-variable "backup_cron"           { type = string default = "15 2 * * *" }
-variable "backup_retention_days" { type = number default = 30 }
+variable "backup_bucket_name" {
+  type = string
+}
+
+variable "backup_prefix" {
+  type    = string
+  default = "mongo/stardb"
+}
+
+variable "backup_cron" {
+  type    = string
+  default = "15 2 * * *"
+}
+
+variable "backup_retention_days" {
+  type    = number
+  default = 30
+}
