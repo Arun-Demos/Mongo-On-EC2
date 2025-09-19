@@ -178,7 +178,7 @@ resource "aws_instance" "mongo" {
     volume_type = "gp3"
   }
 
-  user_data = templatefile("${path.module}/cloudinit.yaml.tmpl", {
+  user_data = templatefile("${path.module}/cloudinit/cloudinit.yaml.tmpl", {
     MONGO_MAJOR = var.mongo_version
     REGION      = var.aws_region
     BUCKET      = var.backup_bucket_name
