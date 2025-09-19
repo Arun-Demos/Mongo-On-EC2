@@ -151,6 +151,19 @@ resource "aws_ebs_volume" "mongo_data" {
 ############################################
 # EC2 Instance
 ############################################
+
+# Generate a strong admin password and store it in SSM (SecureString)
+resource "random_password" "mongo_admin" {
+  length  = 20
+  special = false
+}
+
+resource "aws_ssm_parameter" "mongo_admin" {
+  name  = "/mongo/admin_password"
+  type  = "SecureString"
+  value = random_password.mongo_admin.result
+}
+
 resource "aws_instance" "mongo" {
   ami                         = var.linux_ami_id
   instance_type               = var.instance_type
@@ -163,18 +176,6 @@ resource "aws_instance" "mongo" {
   root_block_device {
     volume_size = var.root_volume_gb
     volume_type = "gp3"
-  }
-
-  # Generate a strong admin password and store it in SSM (SecureString)
-  resource "random_password" "mongo_admin" {
-    length  = 20
-    special = false
-  }
-  
-  resource "aws_ssm_parameter" "mongo_admin" {
-    name  = "/mongo/admin_password"
-    type  = "SecureString"
-    value = random_password.mongo_admin.result
   }
 
   user_data = templatefile("${path.module}/cloudinit.yaml.tmpl", {
