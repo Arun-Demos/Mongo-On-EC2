@@ -1,5 +1,7 @@
 # --- Subnet info ---
-data "aws_subnet" "selected" { id = var.subnet_id }
+data "aws_subnet" "selected" {
+  id = var.subnet_id
+}
 
 # --- Security Group ---
 resource "aws_security_group" "mongo" {
@@ -7,6 +9,7 @@ resource "aws_security_group" "mongo" {
   description = "MongoDB SG"
   vpc_id      = var.vpc_id
 
+  # SSH
   ingress {
     from_port   = 22
     to_port     = 22
@@ -14,6 +17,7 @@ resource "aws_security_group" "mongo" {
     cidr_blocks = [var.ssh_ingress_cidr]
   }
 
+  # Allow EKS nodes (pods -> private IP)
   dynamic "ingress" {
     for_each = var.eks_node_sg_id != "" ? [1] : []
     content {
@@ -25,6 +29,7 @@ resource "aws_security_group" "mongo" {
     }
   }
 
+  # Optional public access
   dynamic "ingress" {
     for_each = var.public_access ? [1] : []
     content {
@@ -36,6 +41,7 @@ resource "aws_security_group" "mongo" {
     }
   }
 
+  # Optional extra CIDRs
   dynamic "ingress" {
     for_each = var.allowed_cidrs
     content {
@@ -71,7 +77,11 @@ resource "aws_ssm_parameter" "mongo_admin" {
 data "aws_iam_policy_document" "ec2_trust" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service"; identifiers = ["ec2.amazonaws.com"] }
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
   }
 }
 
@@ -90,9 +100,11 @@ data "aws_iam_policy_document" "ssm_read" {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.mongo_admin.arn]
   }
+
   statement {
     actions = ["kms:Decrypt"]
     resources = ["*"]
+
     condition {
       test     = "StringEquals"
       variable = "kms:EncryptionContext:aws:ssm:parameter-name"
@@ -139,7 +151,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
   role = aws_iam_role.ec2_role.name
 }
 
-# --- S3 backups bucket (PRIVATE by default) ---
+# --- S3 backups bucket (private by default) ---
 resource "aws_s3_bucket" "mongo_backups" {
   bucket        = var.backup_bucket_name
   force_destroy = false
@@ -147,7 +159,9 @@ resource "aws_s3_bucket" "mongo_backups" {
 
 resource "aws_s3_bucket_versioning" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
-  versioning_configuration { status = "Enabled" }
+  versioning_configuration {
+    status = "Enabled"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "mongo_backups" {
@@ -161,7 +175,9 @@ resource "aws_s3_bucket_public_access_block" "mongo_backups" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "mongo_backups" {
   bucket = aws_s3_bucket.mongo_backups.id
   rule {
-    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
@@ -170,7 +186,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "mongo_backups" {
   rule {
     id     = "expire-old-backups"
     status = "Enabled"
-    expiration { days = var.backup_retention_days }
+    expiration {
+      days = var.backup_retention_days
+    }
     filter {}
   }
 }
@@ -180,7 +198,10 @@ resource "aws_ebs_volume" "data" {
   availability_zone = data.aws_subnet.selected.availability_zone
   size              = var.data_volume_gb
   type              = "gp3"
-  tags = { Name = "${var.instance_name}-data" }
+
+  tags = {
+    Name = "${var.instance_name}-data"
+  }
 }
 
 # --- EC2 instance ---
@@ -192,7 +213,9 @@ resource "aws_instance" "mongo" {
   key_name               = var.key_name
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
-  root_block_device { volume_size = var.root_volume_gb }
+  root_block_device {
+    volume_size = var.root_volume_gb
+  }
 
   user_data = <<-CLOUDINIT
   #cloud-config
@@ -248,7 +271,7 @@ EOR
         echo -e "storage:\n  dbPath: /var/lib/mongo" >> /etc/mongod.conf
       fi
 
-      # Bind addresses
+      # Bind addresses: localhost + private IP (+ all if PUBLIC=true)
       PRIV_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4 || echo 127.0.0.1)
       BIND_LIST="127.0.0.1,${PRIV_IP}"
       if [ "$PUBLIC" = "true" ]; then
@@ -257,7 +280,7 @@ EOR
       if grep -q '^ *bindIp:' /etc/mongod.conf; then
         sed -i "s/^ *bindIp: .*/  bindIp: ${BIND_LIST}/" /etc/mongod.conf
       else
-        sed -i "/^net:/a\  bindIp: ${BIND_LIST}" /etc/mongod.conf || echo -e "net:\n  bindIp: ${BIND_LIST}" >> /etc/mongod.conf
+        sed -i "/^net:/a\\  bindIp: ${BIND_LIST}" /etc/mongod.conf || echo -e "net:\n  bindIp: ${BIND_LIST}" >> /etc/mongod.conf
       fi
 
       # Enable auth
@@ -282,7 +305,7 @@ EOR
       systemctl restart mongod
       sleep 3
 
-      # --- Seed files ---
+      # --- Seed files (schema + data) ---
       mkdir -p /root/seed
       cat >/root/seed/schema.js <<'EOSCHEMA'
 ${file("${path.module}/../seed/schema.js")}
@@ -317,7 +340,9 @@ EOB
       systemctl restart crond
   CLOUDINIT
 
-  tags = { Name = var.instance_name }
+  tags = {
+    Name = var.instance_name
+  }
 }
 
 # Attach data volume
